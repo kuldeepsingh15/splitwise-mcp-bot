@@ -31,6 +31,7 @@ app.add_middleware(
 # Pydantic model for request
 class QueryRequest(BaseModel):
     query: str
+    chat_history: list = []  # List of previous messages
 
 # Pydantic model for response
 class QueryResponse(BaseModel):
@@ -82,8 +83,10 @@ async def initialize_mcp():
 4. Format your responses in a clear, organized manner
 5. When showing balances or debts, explain what the numbers mean in simple terms
 6. Use friendly, conversational language while being informative
+7. Remember previous conversation context and refer back to it when relevant
+8. If the user asks follow-up questions, use the context from previous messages to provide more relevant answers
 
-Remember: Always prioritize names over IDs and provide context with your analysis."""
+Remember: Always prioritize names over IDs and provide context with your analysis. Use the conversation history to provide more personalized and contextual responses."""
 
     # Create agent with the client
     agent = MCPAgent(llm=llm, client=client, max_steps=30, system_prompt=system_prompt)
@@ -101,13 +104,47 @@ async def root():
 
 @app.post("/query", response_model=QueryResponse)
 async def process_query(request: QueryRequest):
-    """Process a financial query using the MCP agent"""
+    """Process a financial query using the MCP agent with chat context"""
     try:
         if agent is None:
             raise HTTPException(status_code=500, detail="Agent not initialized")
         
-        # Run the query
-        result = await agent.run(request.query)
+        # Build context from chat history (limit to last 10 messages to prevent token overflow)
+        context = ""
+        if request.chat_history:
+            # Take only the last 10 messages to manage context length
+            recent_history = request.chat_history[-10:]
+            
+            # If we have more than 10 messages, create a summary of earlier conversation
+            if len(request.chat_history) > 10:
+                earlier_messages = request.chat_history[:-10]
+                user_topics = []
+                for msg in earlier_messages:
+                    if isinstance(msg, dict) and 'user' in msg:
+                        user_topics.append(msg['user'][:100])  # First 100 chars of each user message
+                
+                context = f"Earlier conversation covered: {', '.join(user_topics[:5])}...\n\n"
+            
+            context += "Recent conversation:\n"
+            for i, msg in enumerate(recent_history):
+                if isinstance(msg, dict):
+                    if 'user' in msg:
+                        context += f"User: {msg['user']}\n"
+                    elif 'server' in msg:
+                        # Truncate long assistant responses to keep context manageable
+                        assistant_msg = msg['server']
+                        if len(assistant_msg) > 500:
+                            assistant_msg = assistant_msg[:500] + "..."
+                        context += f"Assistant: {assistant_msg}\n"
+                else:
+                    context += f"Message {i+1}: {msg}\n"
+            context += "\nCurrent query: "
+        
+        # Combine context with current query
+        full_query = context + request.query if context else request.query
+        
+        # Run the query with full context
+        result = await agent.run(full_query)
         
         return QueryResponse(
             result=result,
@@ -129,6 +166,51 @@ async def health_check():
         "agent_initialized": agent is not None,
         "client_initialized": client is not None
     }
+
+@app.post("/debug-context")
+async def debug_context(request: QueryRequest):
+    """Debug endpoint to see how context is being built"""
+    try:
+        # Build context from chat history (same logic as main endpoint)
+        context = ""
+        if request.chat_history:
+            recent_history = request.chat_history[-10:]
+            
+            if len(request.chat_history) > 10:
+                earlier_messages = request.chat_history[:-10]
+                user_topics = []
+                for msg in earlier_messages:
+                    if isinstance(msg, dict) and 'user' in msg:
+                        user_topics.append(msg['user'][:100])
+                
+                context = f"Earlier conversation covered: {', '.join(user_topics[:5])}...\n\n"
+            
+            context += "Recent conversation:\n"
+            for i, msg in enumerate(recent_history):
+                if isinstance(msg, dict):
+                    if 'user' in msg:
+                        context += f"User: {msg['user']}\n"
+                    elif 'server' in msg:
+                        assistant_msg = msg['server']
+                        if len(assistant_msg) > 500:
+                            assistant_msg = assistant_msg[:500] + "..."
+                        context += f"Assistant: {assistant_msg}\n"
+                else:
+                    context += f"Message {i+1}: {msg}\n"
+            context += "\nCurrent query: "
+        
+        full_query = context + request.query if context else request.query
+        
+        return {
+            "original_query": request.query,
+            "chat_history_length": len(request.chat_history) if request.chat_history else 0,
+            "context_built": context,
+            "full_query": full_query,
+            "context_length": len(full_query)
+        }
+    
+    except Exception as e:
+        return {"error": str(e)}
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 

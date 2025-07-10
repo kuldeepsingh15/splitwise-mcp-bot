@@ -6,6 +6,7 @@ export default function App() {
   const [chatHistory, setChatHistory] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [showContextInfo, setShowContextInfo] = useState(false);
   const chatEndRef = useRef(null);
 
   useEffect(() => {
@@ -22,10 +23,20 @@ export default function App() {
     setLoading(true);
 
     try {
+      // Prepare chat history for context
+      const chatContext = chatHistory.map(msg => {
+        if (msg.user) return { user: msg.user };
+        if (msg.server) return { server: msg.server };
+        return msg;
+      });
+
       const res = await fetch("http://localhost:8000/query", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ query: input }),
+        body: JSON.stringify({ 
+          query: input,
+          chat_history: chatContext
+        }),
       });
       
       if (!res.ok) {
@@ -111,9 +122,45 @@ export default function App() {
       <header className="chat-header">
         <div className="chat-header-title">Financial Assistant</div>
         <div className="chat-header-desc">Your Splitwise AI Assistant</div>
+        <button 
+          onClick={() => setShowContextInfo(!showContextInfo)}
+          style={{
+            position: 'absolute',
+            right: '20px',
+            top: '50%',
+            transform: 'translateY(-50%)',
+            background: 'transparent',
+            border: '1px solid #38bdf8',
+            color: '#38bdf8',
+            padding: '8px 12px',
+            borderRadius: '6px',
+            cursor: 'pointer',
+            fontSize: '12px'
+          }}
+        >
+          {showContextInfo ? 'Hide' : 'Show'} Context
+        </button>
       </header>
       <div className="chat-card">
         <div className="chat-history" id="chat-history">
+          {showContextInfo && chatHistory.length > 0 && (
+            <div style={{
+              background: 'rgba(56, 189, 248, 0.1)',
+              border: '1px solid #38bdf8',
+              borderRadius: '8px',
+              padding: '12px',
+              margin: '10px',
+              fontSize: '12px',
+              color: '#38bdf8'
+            }}>
+              <strong>Context Info:</strong> {chatHistory.length} messages in conversation
+              {chatHistory.length > 10 && (
+                <span style={{marginLeft: '10px', color: '#fbbf24'}}>
+                  (Showing last 10 for context)
+                </span>
+              )}
+            </div>
+          )}
           {chatHistory.map((msg, idx) => renderMessage(msg, idx))}
           {loading && (
             <div className="msg server">

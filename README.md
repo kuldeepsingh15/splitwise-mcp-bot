@@ -146,6 +146,23 @@ This project is initialized with Git and includes a comprehensive `.gitignore` f
 2. Update the code to use `os.getenv()` to read the variable
 3. Document the new variable in this README
 
+### Chat Context Management
+
+The application now supports full conversation context:
+
+- **Context Preservation**: The backend maintains conversation history and includes it in each query
+- **Smart Truncation**: Long conversations are intelligently summarized to prevent token overflow
+- **Context Limits**: Only the last 10 messages are included in full detail
+- **Earlier Summary**: For longer conversations, earlier messages are summarized
+- **Debug Endpoint**: Use `/debug-context` to see how context is being built
+
+### Testing Context Functionality
+
+Run the test script to verify context handling:
+```bash
+node test-context.js
+```
+
 ### Project Structure
 
 - **Frontend**: React app with Vite for fast development

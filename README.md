@@ -8,7 +8,7 @@ A comprehensive project that integrates Splitwise API with AI capabilities using
 splitwise gen-ai/
 ├── chat-frontend/          # React frontend application
 ├── splitwise-mcp/         # Splitwise MCP server
-├── mcp-use/              # MCP client and API server
+├── backend/               # MCP client and API server
 ├── start-all.bat         # Windows batch script to start all services
 ├── start-all.ps1         # PowerShell script to start all services
 └── README.md             # This file
@@ -41,12 +41,12 @@ SPLITWISE_API_TOKEN=your_actual_splitwise_api_token_here
 SPLITWISE_BASE_URL=https://secure.splitwise.com/api/v3.0
 ```
 
-### 2. MCP Use Server
+### 2. Backend Server
 
-Navigate to the `mcp-use` directory and set up environment variables:
+Navigate to the `backend` directory and set up environment variables:
 
 ```bash
-cd mcp-use
+cd backend
 ```
 
 Copy the example environment file:
@@ -77,9 +77,9 @@ cd splitwise-mcp
 pip install -r requirements.txt
 ```
 
-For MCP Use server:
+For Backend server:
 ```bash
-cd mcp-use
+cd backend
 pip install -r requirements.txt
 ```
 
@@ -105,9 +105,9 @@ start-all.bat
    python main.py
    ```
 
-2. **Start MCP Use Server:**
+2. **Start Backend Server:**
    ```bash
-   cd mcp-use
+   cd backend
    python server.py
    ```
 
@@ -150,7 +150,7 @@ This project is initialized with Git and includes a comprehensive `.gitignore` f
 
 - **Frontend**: React app with Vite for fast development
 - **Splitwise MCP**: FastMCP server that wraps Splitwise API
-- **MCP Use**: FastAPI server that coordinates between frontend and MCP servers
+- **Backend**: FastAPI server that coordinates between frontend and MCP servers
 
 ## Troubleshooting
 
@@ -161,7 +161,7 @@ This project is initialized with Git and includes a comprehensive `.gitignore` f
    - Verify your API token is correct
 
 2. **"GOOGLE_API_KEY environment variable is required"**
-   - Make sure you've created a `.env` file in `mcp-use/`
+   - Make sure you've created a `.env` file in `backend/`
    - Verify your Google AI API key is correct
 
 3. **Port conflicts**

@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "concurrently \"npm run dev:frontend\" \"npm run dev:backend\" \"npm run dev:mcp\"",
     "dev:frontend": "cd chat-frontend && npm run dev",
-    "dev:backend": "cd mcp-use && python server.py",
+    "dev:backend": "cd backend && python server.py",
     "dev:mcp": "cd splitwise-mcp && python main.py server",
     "install:frontend": "cd chat-frontend && npm install",
     "install:all": "npm run install:frontend"

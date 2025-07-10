@@ -8,7 +8,7 @@ $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir\chat-frontend'; npm run dev" -WindowStyle Normal
 
 # Start the backend server (FastAPI/Uvicorn)
-Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir\mcp-use'; python server.py" -WindowStyle Normal
+Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir\backend'; python server.py" -WindowStyle Normal
 
 # Start the MCP server
 Start-Process powershell -ArgumentList "-NoExit", "-Command", "cd '$scriptDir\splitwise-mcp'; python main.py server" -WindowStyle Normal

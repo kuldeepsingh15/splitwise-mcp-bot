@@ -196,4 +196,4 @@ node test-context.js
 
 ## License
 
-This project is for educational and personal use. Please respect the terms of service for all APIs used. 
+This project is for educational and personal use. Please respect the terms of service for all APIs used do not breach privacy. 

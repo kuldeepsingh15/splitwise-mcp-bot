@@ -1,5 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
+import Login from './components/Login';
+import Register from './components/Register';
 import './App.css'
 
 export default function App() {
@@ -7,15 +9,74 @@ export default function App() {
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [showContextInfo, setShowContextInfo] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [token, setToken] = useState(null);
+  const [showRegister, setShowRegister] = useState(false);
+  const [user, setUser] = useState(null);
   const chatEndRef = useRef(null);
+
+  // Check for existing token on component mount
+  useEffect(() => {
+    const savedToken = localStorage.getItem('token');
+    if (savedToken) {
+      setToken(savedToken);
+      setIsAuthenticated(true);
+      // Verify token is still valid
+      verifyToken(savedToken);
+    }
+  }, []);
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory, loading]);
 
+  const verifyToken = async (tokenToVerify) => {
+    try {
+      const response = await fetch('http://localhost:8000/me', {
+        headers: {
+          'Authorization': `Bearer ${tokenToVerify}`
+        }
+      });
+      
+      if (response.ok) {
+        const userData = await response.json();
+        setUser(userData);
+        setIsAuthenticated(true);
+        setToken(tokenToVerify);
+      } else {
+        // Token is invalid, clear it
+        localStorage.removeItem('token');
+        setIsAuthenticated(false);
+        setToken(null);
+        setUser(null);
+      }
+    } catch (error) {
+      console.error('Token verification failed:', error);
+      localStorage.removeItem('token');
+      setIsAuthenticated(false);
+      setToken(null);
+      setUser(null);
+    }
+  };
+
+  const handleLogin = (newToken) => {
+    setToken(newToken);
+    setIsAuthenticated(true);
+    setShowRegister(false);
+    verifyToken(newToken);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('token');
+    setIsAuthenticated(false);
+    setToken(null);
+    setUser(null);
+    setChatHistory([]);
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!input.trim() || loading) return;
+    if (!input.trim() || loading || !token) return;
 
     const newHistory = [...chatHistory, { user: input }];
     setChatHistory(newHistory);
@@ -32,12 +93,25 @@ export default function App() {
 
       const res = await fetch("http://localhost:8000/query", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
         body: JSON.stringify({ 
           query: input,
           chat_history: chatContext
         }),
       });
+      
+      if (res.status === 401) {
+        // Token expired or invalid
+        handleLogout();
+        setChatHistory([
+          ...newHistory,
+          { server: "Your session has expired. Please log in again.", type: "text" },
+        ]);
+        return;
+      }
       
       if (!res.ok) {
         throw new Error(`HTTP error! status: ${res.status}`);
@@ -117,29 +191,86 @@ export default function App() {
     return null;
   };
 
+  // Show authentication screens if not authenticated
+  if (!isAuthenticated) {
+    return (
+      <div style={{
+        height: '100vh',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        background: '#18191c',
+        fontFamily: 'Segoe UI, Roboto, Arial, sans-serif'
+      }}>
+        {showRegister ? (
+          <Register 
+            onRegister={handleLogin}
+            onSwitchToLogin={() => setShowRegister(false)}
+            onLogin={handleLogin}
+          />
+        ) : (
+          <Login 
+            onLogin={handleLogin}
+            onSwitchToRegister={() => setShowRegister(true)}
+          />
+        )}
+      </div>
+    );
+  }
+
+  // Show chat interface if authenticated
   return (
     <div className="chat-outer">
       <header className="chat-header">
         <div className="chat-header-title">Financial Assistant</div>
         <div className="chat-header-desc">Your Splitwise AI Assistant</div>
-        <button 
-          onClick={() => setShowContextInfo(!showContextInfo)}
-          style={{
-            position: 'absolute',
-            right: '20px',
-            top: '50%',
-            transform: 'translateY(-50%)',
-            background: 'transparent',
-            border: '1px solid #38bdf8',
-            color: '#38bdf8',
-            padding: '8px 12px',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '12px'
-          }}
-        >
-          {showContextInfo ? 'Hide' : 'Show'} Context
-        </button>
+        <div style={{
+          position: 'absolute',
+          right: '20px',
+          top: '50%',
+          transform: 'translateY(-50%)',
+          display: 'flex',
+          gap: '10px',
+          alignItems: 'center'
+        }}>
+          {user && (
+            <span style={{
+              fontSize: '12px',
+              color: '#bbdefb',
+              marginRight: '10px'
+            }}>
+              Welcome, {user.username}
+            </span>
+          )}
+          <button 
+            onClick={() => setShowContextInfo(!showContextInfo)}
+            style={{
+              background: 'transparent',
+              border: '1px solid #38bdf8',
+              color: '#38bdf8',
+              padding: '8px 12px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '12px'
+            }}
+          >
+            {showContextInfo ? 'Hide' : 'Show'} Context
+          </button>
+          <button 
+            onClick={handleLogout}
+            style={{
+              background: 'transparent',
+              border: '1px solid #ef4444',
+              color: '#ef4444',
+              padding: '8px 12px',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '12px'
+            }}
+          >
+            Logout
+          </button>
+        </div>
       </header>
       <div className="chat-card">
         <div className="chat-history" id="chat-history">
@@ -340,18 +471,20 @@ export default function App() {
           background: transparent;
           border: none;
           box-shadow: none;
-          width: 44px;
-          height: 44px;
-          padding: 0;
-          margin: 0;
+          color: #fff;
+          cursor: pointer;
+          padding: 8px;
+          border-radius: 50%;
+          transition: all 0.2s ease;
           position: absolute;
-          right: 6px;
-          bottom: 8px;
-          z-index: 2;
+          right: 18px;
+          top: 50%;
+          transform: translateY(-50%);
           display: flex;
           align-items: center;
           justify-content: center;
-          cursor: pointer;
+          width: 32px;
+          height: 32px;
         }
         .chat-send-btn:disabled {
           background: transparent;

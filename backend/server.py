@@ -17,6 +17,11 @@ google_api_key = os.getenv("GOOGLE_API_KEY")
 if not google_api_key:
     raise ValueError("GOOGLE_API_KEY environment variable is required")
 
+# Get MCP server URL from environment
+mcp_server_url = os.getenv("MCP_SERVER_URL")
+if not mcp_server_url:
+    raise ValueError("MCP_SERVER_URL environment variable is required")
+
 # Create FastAPI app
 app = FastAPI(title="MCP Financial Assistant API", version="1.0.0")
 
@@ -56,7 +61,7 @@ async def initialize_mcp():
                 "command": "npx",
                 "args": [
                     "mcp-remote",
-                    "http://localhost:4200/mcp/"
+                    mcp_server_url
                 ]
             }
         }

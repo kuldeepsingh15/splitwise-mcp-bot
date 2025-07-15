@@ -2,6 +2,11 @@ import sqlite3
 import os
 from typing import Optional, Dict, Any
 from datetime import datetime
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 class UserDatabase:
     def __init__(self, db_path: str = "users.db"):
@@ -13,10 +18,10 @@ class UserDatabase:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        # Create users table with unique_user_id as primary key
+        # Create users table with browser_id as primary key
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS users (
-                unique_user_id TEXT PRIMARY KEY,
+                browser_id TEXT PRIMARY KEY,
                 splitwise_user_id INTEGER NOT NULL,
                 access_token TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -27,11 +32,11 @@ class UserDatabase:
         conn.commit()
         conn.close()
     
-    def get_user_token_and_splitwise_id(self, unique_user_id: str) -> Optional[Dict[str, Any]]:
-        """Get the splitwise_user_id and access token for a unique user from the database.
+    def get_user_token_and_splitwise_id(self, browser_id: str) -> Optional[Dict[str, Any]]:
+        """Get the splitwise_user_id and access token for a browser from the database.
         
         Args:
-            unique_user_id: The unique user ID to look up
+            browser_id: The browser ID to look up
             
         Returns:
             Dict with splitwise_user_id and access_token if found, None otherwise
@@ -39,7 +44,7 @@ class UserDatabase:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         
-        cursor.execute('SELECT splitwise_user_id, access_token FROM users WHERE unique_user_id = ?', (unique_user_id,))
+        cursor.execute('SELECT splitwise_user_id, access_token FROM users WHERE browser_id = ?', (browser_id,))
         result = cursor.fetchone()
         
         conn.close()
@@ -49,11 +54,11 @@ class UserDatabase:
         else:
             return None
     
-    def save_user_token(self, unique_user_id: str, splitwise_user_id: int, access_token: str) -> bool:
-        """Save or update a user's splitwise_user_id and access token in the database.
+    def save_user_token(self, browser_id: str, splitwise_user_id: int, access_token: str) -> bool:
+        """Save or update a browser's splitwise_user_id and access token in the database.
         
         Args:
-            unique_user_id: The unique user ID
+            browser_id: The browser ID
             splitwise_user_id: The Splitwise user ID
             access_token: The access token to save
             
@@ -66,22 +71,22 @@ class UserDatabase:
             
             # Use INSERT OR REPLACE to handle both new users and updates
             cursor.execute('''
-                INSERT OR REPLACE INTO users (unique_user_id, splitwise_user_id, access_token, updated_at)
+                INSERT OR REPLACE INTO users (browser_id, splitwise_user_id, access_token, updated_at)
                 VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ''', (unique_user_id, splitwise_user_id, access_token))
+            ''', (browser_id, splitwise_user_id, access_token))
             
             conn.commit()
             conn.close()
             return True
         except Exception as e:
-            print(f"Error saving user token: {e}")
+            logger.error(f"Error saving user token: {e}")
             return False
     
-    def delete_user_token(self, unique_user_id: str) -> bool:
-        """Delete a user's access token from the database.
+    def delete_user_token(self, browser_id: str) -> bool:
+        """Delete a browser's access token from the database.
         
         Args:
-            unique_user_id: The unique user ID to delete
+            browser_id: The browser ID to delete
             
         Returns:
             True if successful, False otherwise
@@ -90,25 +95,25 @@ class UserDatabase:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             
-            cursor.execute('DELETE FROM users WHERE unique_user_id = ?', (unique_user_id,))
+            cursor.execute('DELETE FROM users WHERE browser_id = ?', (browser_id,))
             
             conn.commit()
             conn.close()
             return True
         except Exception as e:
-            print(f"Error deleting user token: {e}")
+            logger.error(f"Error deleting user token: {e}")
             return False
     
-    def user_exists(self, unique_user_id: str) -> bool:
-        """Check if a user exists in the database.
+    def user_exists(self, browser_id: str) -> bool:
+        """Check if a browser exists in the database.
         
         Args:
-            unique_user_id: The unique user ID to check
+            browser_id: The browser ID to check
             
         Returns:
-            True if user exists, False otherwise
+            True if browser exists, False otherwise
         """
-        return self.get_user_token_and_splitwise_id(unique_user_id) is not None
+        return self.get_user_token_and_splitwise_id(browser_id) is not None
 
 # Global database instance
 db = UserDatabase() 

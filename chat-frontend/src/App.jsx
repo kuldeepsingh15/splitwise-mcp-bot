@@ -2,12 +2,30 @@ import React, { useState, useRef, useEffect } from "react";
 import ReactMarkdown from "react-markdown";
 import './App.css'
 
+// Utility to generate a random browser ID
+function generateBrowserId() {
+  return (
+    Date.now().toString(36) +
+    Math.random().toString(36).substring(2, 15)
+  );
+}
+
 export default function App() {
   const [chatHistory, setChatHistory] = useState([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(false);
   const [showContextInfo, setShowContextInfo] = useState(false);
   const chatEndRef = useRef(null);
+
+  // Browser ID state (persistent across browser restarts)
+  const [browserId] = useState(() => {
+    let bid = localStorage.getItem('browser_id');
+    if (!bid) {
+      bid = generateBrowserId();
+      localStorage.setItem('browser_id', bid);
+    }
+    return bid;
+  });
 
   useEffect(() => {
     chatEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -30,12 +48,13 @@ export default function App() {
         return msg;
       });
 
-      const res = await fetch("http://localhost:8000/query", {
+      const res = await fetch(`${import.meta.env.VITE_BACKEND_URL}/query`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           query: input,
-          chat_history: chatContext
+          chat_history: chatContext,
+          browser_id: browserId // <-- send browser ID with every call
         }),
       });
       
@@ -74,6 +93,22 @@ export default function App() {
         </div>
       );
     if (msg.server) {
+      // Replace login link in the message with a styled anchor, preserving agent's message
+      const loginLinkMatch = typeof msg.server === 'string' && msg.server.match(/Login Link:\s*(https?:\/\/\S+)/i);
+      if (loginLinkMatch) {
+        const url = loginLinkMatch[1];
+        const content = msg.server.replace(
+          /Login Link:\s*(https?:\/\/\S+)/i,
+          `<a href="${url}" target="_blank" rel="noopener noreferrer" style="color:#38bdf8;text-decoration:underline;font-weight:bold;">Login Link</a>`
+        );
+        return (
+          <div key={idx} className="msg server">
+            <div className="bubble">
+              <span dangerouslySetInnerHTML={{ __html: content }} />
+            </div>
+          </div>
+        );
+      }
       if (msg.type === "table") {
         return (
           <div key={idx} className="msg server">

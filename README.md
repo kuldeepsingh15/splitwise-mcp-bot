@@ -1,6 +1,17 @@
-# Splitwise Gen-AI Project
+# Splitwise Gen-AI Project → # Financial Assistant Gen-AI Project
 
-A comprehensive project that integrates Splitwise API with AI capabilities using MCP (Model Context Protocol) and a React frontend.
+A comprehensive project that integrates Splitwise API with AI capabilities using MCP (Model Context Protocol) and a React frontend. → A next-generation financial assistant platform that leverages AI to help users manage, analyze, and optimize their finances. The current version integrates Splitwise for expense management, but this is just the beginning—future updates will include features like credit report analysis, financial insights, and more.
+
+## Project Overview
+
+This project aims to become your all-in-one financial assistant. While the initial release focuses on Splitwise integration for group expense management, our roadmap includes:
+- Fetching and analyzing credit reports
+- Personalized financial insights and recommendations
+- Budget tracking and optimization
+- Integration with additional financial data sources
+- And much more!
+
+Splitwise is just one part of the broader vision to provide a holistic financial management experience powered by AI.
 
 ## Project Structure
 
@@ -197,3 +208,16 @@ node test-context.js
 ## License
 
 This project is for educational and personal use. Please respect the terms of service for all APIs used. 
+
+---
+
+**Future Roadmap**
+
+We are actively working to expand this platform beyond Splitwise. Planned features include:
+- Fetching and analyzing credit reports
+- Automated financial health checks
+- Smart budgeting tools
+- Integration with banks and other financial services
+- Advanced analytics and reporting
+
+Stay tuned for updates as we transform this project into a full-featured financial assistant! 

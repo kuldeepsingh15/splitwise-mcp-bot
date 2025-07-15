@@ -7,6 +7,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import uvicorn
+import logging
 
 # Load environment variables
 load_dotenv()
@@ -32,6 +33,7 @@ app.add_middleware(
 class QueryRequest(BaseModel):
     query: str
     chat_history: list = []  # List of previous messages
+    browser_id: str | None = None
 
 # Pydantic model for response
 class QueryResponse(BaseModel):
@@ -62,7 +64,7 @@ async def initialize_mcp():
 
     # Create MCPClient from configuration dictionary
     client = MCPClient.from_dict(config)
-    print("MCP Client initialized")
+    logging.info("MCP Client initialized")
 
     # Create LLM
     llm = ChatGoogleGenerativeAI(
@@ -72,25 +74,31 @@ async def initialize_mcp():
         timeout=None,
         max_retries=2,
     )
-    print("LLM initialized")
+    logging.info("LLM initialized")
 
     # Define system prompt
-    system_prompt = """You are a helpful financial assistant that works with Splitwise data. Your responses should follow these guidelines:
+    system_prompt = """You are a helpful financial assistant and general-purpose assistant.
 
-1. ALWAYS return human-readable names instead of IDs (user names, group names, expense names, etc.)
-2. NEVER return raw IDs, user IDs, group IDs, or any technical identifiers
-3. Provide brief analysis and insights with your results, not just bare data
-4. Format your responses in a clear, organized manner
-5. When showing balances or debts, explain what the numbers mean in simple terms
-6. Use friendly, conversational language while being informative
-7. Remember previous conversation context and refer back to it when relevant
-8. If the user asks follow-up questions, use the context from previous messages to provide more relevant answers
+Guidelines:
+1. For general queries, answer naturally and helpfully, just like a friendly assistant. Do not mention Splitwise unless the user asks about it or about expenses, groups, or friends.
+2. If the user asks about Splitwise, call the appropriate Splitwise tool (such as get_current_user) directly, using the information provided by the application. Do not ask the user for any internal variables or IDs.
+3. NEVER mention or ask for internal variables, IDs, or technical details such as 'browser_id' or any implementation details. Do not instruct the user to look for such variables.
+4. If a Splitwise tool returns a login link, always send it to the frontend as a clearly marked clickable link, e.g., 'Login Link: https://...'.
+5. If there is no browser_id in the query, politely ask the user to reload the page to continue instaed of assuming.
+6. ALWAYS return human-readable names instead of IDs (user names, group names, expense names, etc.)
+7. NEVER return raw IDs, user IDs, group IDs, or any technical identifiers
+8. Provide brief analysis and insights with your results, not just bare data
+9. Format your responses in a clear, organized manner
+10. When showing balances or debts, explain what the numbers mean in simple terms
+11. Use friendly, conversational language while being informative
+12. Remember previous conversation context and refer back to it when relevant
+13. If the user asks follow-up questions, use the context from previous messages to provide more relevant answers
 
-Remember: Always prioritize names over IDs and provide context with your analysis. Use the conversation history to provide more personalized and contextual responses."""
+Remember: Only mention Splitwise if the user asks about it or about expenses, groups, or friends. Never expose internal implementation details. Always prioritize names over IDs and provide context with your analysis. Use the conversation history to provide more personalized and contextual responses."""
 
     # Create agent with the client
     agent = MCPAgent(llm=llm, client=client, max_steps=30, system_prompt=system_prompt)
-    print("Agent initialized")
+    logging.info("Agent initialized")
 
 @app.on_event("startup")
 async def startup_event():
@@ -109,6 +117,9 @@ async def process_query(request: QueryRequest):
         if agent is None:
             raise HTTPException(status_code=500, detail="Agent not initialized")
         
+        # Extract browser_id from request if present
+        browser_id = getattr(request, 'browser_id', None)
+        logging.info(f"browser_id: {browser_id}")
         # Build context from chat history (limit to last 10 messages to prevent token overflow)
         context = ""
         if request.chat_history:
@@ -144,7 +155,8 @@ async def process_query(request: QueryRequest):
         full_query = context + request.query if context else request.query
         
         # Run the query with full context
-        result = await agent.run(full_query)
+        full_query_with_id = f"[browser_id: {browser_id}]\n{full_query}" if browser_id else full_query
+        result = await agent.run(full_query_with_id)
         
         return QueryResponse(
             result=result,
@@ -152,6 +164,7 @@ async def process_query(request: QueryRequest):
         )
     
     except Exception as e:
+        logging.exception("Error processing query")
         return QueryResponse(
             result="",
             success=False,
@@ -210,7 +223,8 @@ async def debug_context(request: QueryRequest):
         }
     
     except Exception as e:
+        logging.exception("Error in debug-context endpoint")
         return {"error": str(e)}
 
 if __name__ == "__main__":
-    uvicorn.run(app, host="0.0.0.0", port=8000) 
+    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", "80")))

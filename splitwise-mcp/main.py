@@ -3,9 +3,17 @@ from fastmcp import FastMCP
 import requests
 from typing import Optional, List, Dict, Any
 from dotenv import load_dotenv
+from database import db
+from fastapi import Request
+from fastapi.responses import JSONResponse, HTMLResponse, Response
+import logging
 
 # Load environment variables
 load_dotenv()
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 mcp = FastMCP(
     name="Splitwise MCP Server", 
@@ -26,60 +34,56 @@ The API uses a personal access token for authentication and supports both equal 
 
 # Get configuration from environment variables
 base_url = os.getenv("SPLITWISE_BASE_URL", "https://secure.splitwise.com/api/v3.0")
-personal_access_token = os.getenv("SPLITWISE_API_TOKEN")
 
-if not personal_access_token:
-    raise ValueError("SPLITWISE_API_TOKEN environment variable is required")
-
-def get_headers():
+def get_headers(access_token: str) -> dict:
     return {
-        "Authorization": f"Bearer {personal_access_token}"
+        "Authorization": f"Bearer {access_token}"
     }
+
+def validate_browser_id(browser_id: str) -> dict:
+    """Validate that a browser_id is provided and check for access token and splitwise_user_id in database.
+    Args:
+        browser_id: The browser ID to validate
+    Returns:
+        dict: Status with splitwise_user_id and access token if found, or error message with login URL
+    """
+    user_data = db.get_user_token_and_splitwise_id(browser_id)
+    if user_data is None:
+        auth_url = (
+            f"https://secure.splitwise.com/oauth/authorize?"
+            f"client_id={os.getenv('SPLITWISE_CONSUMER_KEY')}&response_type=code&redirect_uri={os.getenv('REDIRECT_URI')}&state={browser_id}"
+        )
+        return {
+            "status": "fail",
+            "error": f"User {browser_id} authentication expired. Please login to Splitwise and provide your access token again. After logging in, say 'try again' to repeat your last action. Please show this url to user.",
+            "redirect": auth_url
+        }
+    return {"status": "success", "splitwise_user_id": user_data["splitwise_user_id"], "access_token": user_data["access_token"]}
 
 # User endpoints
 @mcp.tool
-def get_current_user() -> dict:
-    """Retrieve detailed information about the currently authenticated user's profile.
-    
-    This tool fetches the complete user profile including:
-    - Personal information (name, email, registration status)
-    - Profile picture URLs (small, medium, large sizes)
-    - Notification settings and unread notification count
-    - Default currency and locale preferences
-    - Account creation and last activity timestamps
-    
-    Returns:
-        dict: Complete user profile with all account details and preferences
-        
-    Example response includes user ID, name, email, notification count, default currency, etc.
-    """
-    print("Getting current user")
-    headers = get_headers()
+def get_current_user(browser_id: str) -> dict:
+    """Retrieve detailed information about the currently authenticated user's profile."""
+    caller_details = validate_browser_id(browser_id)
+    if caller_details["status"] == "fail":
+        return caller_details
+    headers = get_headers(caller_details["access_token"])
     response = requests.get(f"{base_url}/get_current_user", headers=headers)
     return response.json()
 
 @mcp.tool
-def get_user(user_id: int) -> dict:
-    """Retrieve public profile information about another Splitwise user by their ID.
-    
-    This tool allows you to view another user's public profile information. You can only
-    access users who are your friends or in groups with you.
-    
-    Args:
-        user_id (int): The unique identifier of the user whose profile you want to retrieve
-        
-    Returns:
-        dict: Public profile information including name, email, profile picture, and registration status
-        
-    Note: This will only work for users who are your friends or in shared groups with you.
-    """
-    headers = get_headers()
-    response = requests.get(f"{base_url}/get_user/{user_id}", headers=headers)
+def get_user(browser_id: str, target_user_id: int) -> dict:
+    """Retrieve public profile information about another Splitwise user by their ID."""
+    caller_details = validate_browser_id(browser_id)
+    if caller_details["status"] == "fail":
+        return caller_details
+    headers = get_headers(caller_details["access_token"])
+    response = requests.get(f"{base_url}/get_user/{target_user_id}", headers=headers)
     return response.json()
 
 @mcp.tool
 def update_user(
-    user_id: int,
+    browser_id: str,
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
     email: Optional[str] = None,
@@ -97,7 +101,7 @@ def update_user(
     Only provide the parameters you want to change - unchanged parameters will keep their current values.
     
     Args:
-        user_id (int): Your user ID (must be your own ID)
+        browser_id (str): Your browser ID (required for all tool calls)
         first_name (str, optional): New first name for your profile
         last_name (str, optional): New last name for your profile
         email (str, optional): New email address for your account
@@ -109,13 +113,16 @@ def update_user(
         dict: Updated user profile information
         
     Examples:
-        - Update just your name: update_user(123, first_name="John", last_name="Doe")
-        - Change default currency: update_user(123, default_currency="USD")
-        - Update multiple fields: update_user(123, first_name="Jane", email="jane@example.com", default_currency="EUR")
+        - Update just your name: update_user("user123", first_name="John", last_name="Doe")
+        - Change default currency: update_user("user123", default_currency="USD")
+        - Update multiple fields: update_user("user123", first_name="Jane", email="jane@example.com", default_currency="EUR")
     """
-    headers = get_headers()
+    caller_details = validate_browser_id(browser_id)
+    if caller_details["status"] == "fail":
+        return caller_details
+    headers = get_headers(caller_details["access_token"])
+    splitwise_user_id = caller_details["splitwise_user_id"]
     data = {}
-    
     if first_name is not None:
         data['first_name'] = first_name
     if last_name is not None:
@@ -128,13 +135,59 @@ def update_user(
         data['locale'] = locale
     if default_currency is not None:
         data['default_currency'] = default_currency
-    
-    response = requests.post(f"{base_url}/update_user/{user_id}", headers=headers, json=data)
+    response = requests.post(f"{base_url}/update_user/{splitwise_user_id}", headers=headers, json=data)
     return response.json()
+
+@mcp.tool
+def logout(browser_id: str) -> dict:
+    """Logout the current user by removing their access token from the database.
+    
+    This tool securely logs out a user by deleting their Splitwise access token from the local database.
+    After logout, the user will need to authenticate again to use any Splitwise features.
+    
+    Args:
+        browser_id (str): Your browser ID (required for all tool calls)
+        
+    Returns:
+        dict: Status message indicating successful logout or error
+        
+    Example:
+        - Logout current user: logout("user123")
+        
+    Note: This only removes the token from local storage. The token remains valid on Splitwise's servers
+    until it expires or is revoked through Splitwise's account settings.
+    """
+    try:
+        # Check if user exists in database
+        if not db.user_exists(browser_id):
+            return {
+                "status": "fail",
+                "error": f"User {browser_id} is not logged in or doesn't exist in the database."
+            }
+        
+        # Delete the user's token from database
+        success = db.delete_user_token(browser_id)
+        
+        if success:
+            return {
+                "status": "success",
+                "message": f"Successfully logged out user {browser_id}. You will need to authenticate again to use Splitwise features."
+            }
+        else:
+            return {
+                "status": "fail",
+                "error": f"Failed to logout user {browser_id}. Please try again."
+            }
+    except Exception as e:
+        logger.error(f"Error during logout for user {browser_id}: {e}")
+        return {
+            "status": "fail",
+            "error": f"An error occurred during logout: {str(e)}"
+        }
 
 # Group endpoints
 @mcp.tool
-def get_groups() -> dict:
+def get_groups(browser_id: str) -> dict:
     """Retrieve all groups that the current user is a member of.
     
     This tool returns a comprehensive list of all groups you belong to, including:
@@ -147,17 +200,23 @@ def get_groups() -> dict:
     Groups can be of various types: home (roommates), trip, couple, apartment, house, or other.
     Expenses not associated with any group are listed under group ID 0.
     
+    Args:
+        browser_id (str): Your browser ID (required for all tool calls)
+    
     Returns:
         dict: List of all user's groups with detailed information about each group
         
     Example: Returns groups like "Apartment 2024", "Weekend Trip", "Couple Expenses", etc.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.get(f"{base_url}/get_groups", headers=headers)
     return response.json()
 
 @mcp.tool
-def get_group(group_id: int) -> dict:
+def get_group(browser_id: str, group_id: int) -> dict:
     """Get detailed information about a specific group by its ID.
     
     This tool provides comprehensive details about a particular group including:
@@ -168,6 +227,7 @@ def get_group(group_id: int) -> dict:
     - Group invite link for adding new members
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         group_id (int): The unique identifier of the group to retrieve
         
     Returns:
@@ -175,12 +235,16 @@ def get_group(group_id: int) -> dict:
         
     Note: You can only access groups where you are a member.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.get(f"{base_url}/get_group/{group_id}", headers=headers)
     return response.json()
 
 @mcp.tool
 def create_group(
+    browser_id: str,
     name: str,
     group_type: str = "other",
     simplify_by_default: bool = False,
@@ -200,6 +264,7 @@ def create_group(
     - "other": General purpose group
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         name (str): The name of the group (e.g., "Apartment 2024", "Weekend Trip")
         group_type (str, optional): Type of group - "home", "trip", "couple", "other", "apartment", "house"
         simplify_by_default (bool, optional): Whether to automatically simplify debts in this group
@@ -213,10 +278,13 @@ def create_group(
         dict: Created group information with group ID and member details
         
     Examples:
-        - Create a roommate group: create_group("Apartment 2024", "home", True)
-        - Create a trip group with members: create_group("Weekend Trip", "trip", users=[{"first_name": "Alice", "last_name": "Smith", "email": "alice@example.com"}])
+        - Create a roommate group: create_group(123, "Apartment 2024", "home", True)
+        - Create a trip group with members: create_group(123, "Weekend Trip", "trip", users=[{"first_name": "Alice", "last_name": "Smith", "email": "alice@example.com"}])
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     data = {
         "name": name,
         "group_type": group_type,
@@ -233,7 +301,7 @@ def create_group(
     return response.json()
 
 @mcp.tool
-def delete_group(group_id: int) -> dict:
+def delete_group(browser_id: str, group_id: int) -> dict:
     """Permanently delete a group and all associated data.
     
     This action is irreversible and will delete:
@@ -245,6 +313,7 @@ def delete_group(group_id: int) -> dict:
     Use this tool carefully as it cannot be undone without using the undelete_group tool.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         group_id (int): The unique identifier of the group to delete
         
     Returns:
@@ -252,18 +321,22 @@ def delete_group(group_id: int) -> dict:
         
     Warning: This permanently removes all group data and cannot be undone easily.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.post(f"{base_url}/delete_group/{group_id}", headers=headers)
     return response.json()
 
 @mcp.tool
-def undelete_group(group_id: int) -> dict:
+def undelete_group(browser_id: str, group_id: int) -> dict:
     """Restore a previously deleted group and its associated data.
     
     This tool attempts to restore a group that was previously deleted. The success
     depends on whether the group can still be restored and your permissions.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         group_id (int): The unique identifier of the deleted group to restore
         
     Returns:
@@ -271,14 +344,18 @@ def undelete_group(group_id: int) -> dict:
         
     Note: Restoration may not always be possible depending on how long ago the group was deleted.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.post(f"{base_url}/undelete_group/{group_id}", headers=headers)
     return response.json()
 
 @mcp.tool
 def add_user_to_group(
+    browser_id: str,
     group_id: int,
-    user_id: Optional[int] = None,
+    target_user_id: Optional[int] = None,
     first_name: Optional[str] = None,
     last_name: Optional[str] = None,
     email: Optional[str] = None
@@ -292,29 +369,33 @@ def add_user_to_group(
     The user will receive an invitation to join the group.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         group_id (int): The unique identifier of the group to add the user to
-        user_id (int, optional): The ID of an existing Splitwise user
-        first_name (str, optional): First name of the user (required if user_id not provided)
-        last_name (str, optional): Last name of the user (required if user_id not provided)
-        email (str, optional): Email address of the user (required if user_id not provided)
+        target_user_id (int, optional): The ID of an existing Splitwise user
+        first_name (str, optional): First name of the user (required if target_user_id not provided)
+        last_name (str, optional): Last name of the user (required if target_user_id not provided)
+        email (str, optional): Email address of the user (required if target_user_id not provided)
         
     Returns:
         dict: Success status and user information
         
     Examples:
-        - Add by user ID: add_user_to_group(123, user_id=456)
-        - Add by email: add_user_to_group(123, first_name="John", last_name="Doe", email="john@example.com")
+        - Add by user ID: add_user_to_group(123, 456, target_user_id=789)
+        - Add by email: add_user_to_group(123, 456, first_name="John", last_name="Doe", email="john@example.com")
         
-    Note: Either user_id OR all of first_name, last_name, and email must be provided.
+    Note: Either target_user_id OR all of first_name, last_name, and email must be provided.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     data: Dict[str, Any] = {"group_id": group_id}
     
-    if user_id is not None:
-        data["user_id"] = user_id
+    if target_user_id is not None:
+        data["user_id"] = target_user_id
     else:
         if first_name is None or last_name is None or email is None:
-            raise ValueError("Either user_id or all of first_name, last_name, and email must be provided")
+            raise ValueError("Either target_user_id or all of first_name, last_name, and email must be provided")
         data["first_name"] = first_name
         data["last_name"] = last_name
         data["email"] = email
@@ -323,32 +404,36 @@ def add_user_to_group(
     return response.json()
 
 @mcp.tool
-def remove_user_from_group(group_id: int, user_id: int) -> dict:
+def remove_user_from_group(browser_id: str, group_id: int, target_user_id: int) -> dict:
     """Remove a user from a group.
     
     This tool removes a user from a group. The operation will fail if the user
     has a non-zero balance in the group (they owe money or are owed money).
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         group_id (int): The unique identifier of the group
-        user_id (int): The unique identifier of the user to remove
+        target_user_id (int): The unique identifier of the user to remove
         
     Returns:
         dict: Success status and any error messages
         
     Note: Users with outstanding balances cannot be removed from groups.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     data = {
         "group_id": group_id,
-        "user_id": user_id
+        "user_id": target_user_id
     }
     response = requests.post(f"{base_url}/remove_user_from_group", headers=headers, json=data)
     return response.json()
 
 # Friend endpoints
 @mcp.tool
-def get_friends() -> dict:
+def get_friends(browser_id: str) -> dict:
     """Retrieve all friends of the current user.
     
     This tool returns a list of all your Splitwise friends with detailed information:
@@ -359,17 +444,23 @@ def get_friends() -> dict:
     
     Friends are users you can share individual expenses with outside of groups.
     
+    Args:
+        browser_id (str): Your browser ID (required for all tool calls)
+    
     Returns:
         dict: List of all friends with balance and relationship information
         
     Example: Returns friends like "Alice Smith", "Bob Johnson" with their current balances.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.get(f"{base_url}/get_friends", headers=headers)
     return response.json()
 
 @mcp.tool
-def get_friend(friend_id: int) -> dict:
+def get_friend(browser_id: str, friend_id: int) -> dict:
     """Get detailed information about a specific friend.
     
     This tool provides comprehensive details about a particular friend including:
@@ -379,6 +470,7 @@ def get_friend(friend_id: int) -> dict:
     - Relationship timestamps
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         friend_id (int): The unique identifier of the friend to retrieve
         
     Returns:
@@ -386,12 +478,16 @@ def get_friend(friend_id: int) -> dict:
         
     Note: You can only access information about users who are your friends.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.get(f"{base_url}/get_friend/{friend_id}", headers=headers)
     return response.json()
 
 @mcp.tool
 def create_friend(
+    browser_id: str,
     user_email: str,
     user_first_name: Optional[str] = None,
     user_last_name: Optional[str] = None
@@ -405,6 +501,7 @@ def create_friend(
     Once added as a friend, you can share individual expenses with them outside of groups.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         user_email (str): Email address of the user to add as a friend
         user_first_name (str, optional): First name (required if user doesn't exist on Splitwise)
         user_last_name (str, optional): Last name (required if user doesn't exist on Splitwise)
@@ -413,12 +510,15 @@ def create_friend(
         dict: Friend information including profile details and relationship status
         
     Examples:
-        - Add existing user: create_friend("alice@example.com")
-        - Add new user: create_friend("bob@example.com", "Bob", "Johnson")
+        - Add existing user: create_friend(123, "alice@example.com")
+        - Add new user: create_friend(123, "bob@example.com", "Bob", "Johnson")
         
     Note: If the user doesn't exist, you must provide both first_name and last_name.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     data = {"user_email": user_email}
     
     if user_first_name is not None:
@@ -430,13 +530,14 @@ def create_friend(
     return response.json()
 
 @mcp.tool
-def create_friends(friends: List[Dict[str, str]]) -> dict:
+def create_friends(browser_id: str, friends: List[Dict[str, str]]) -> dict:
     """Add multiple friends to your Splitwise account at once.
     
     This tool allows you to add several friends simultaneously, which is more efficient
     than adding them one by one. For each friend, provide their email and name if needed.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         friends (list): List of friend dictionaries. Each dict should contain:
             - "email": Friend's email address (required)
             - "first_name": Friend's first name (required if user doesn't exist)
@@ -446,10 +547,13 @@ def create_friends(friends: List[Dict[str, str]]) -> dict:
         dict: List of created friends and any error messages for failed additions
         
     Examples:
-        - Add multiple existing users: [{"email": "alice@example.com"}, {"email": "bob@example.com"}]
-        - Add new users: [{"email": "charlie@example.com", "first_name": "Charlie", "last_name": "Brown"}]
+        - Add multiple existing users: create_friends(123, [{"email": "alice@example.com"}, {"email": "bob@example.com"}])
+        - Add new users: create_friends(123, [{"email": "charlie@example.com", "first_name": "Charlie", "last_name": "Brown"}])
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     data = {}
     
     for i, friend in enumerate(friends):
@@ -460,13 +564,14 @@ def create_friends(friends: List[Dict[str, str]]) -> dict:
     return response.json()
 
 @mcp.tool
-def delete_friend(friend_id: int) -> dict:
+def delete_friend(browser_id: str, friend_id: int) -> dict:
     """Remove a friendship from your Splitwise account.
     
     This tool ends the friendship with another user. This will remove them from your
     friends list and you won't be able to share individual expenses with them anymore.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         friend_id (int): The unique identifier of the friend to remove
         
     Returns:
@@ -474,13 +579,16 @@ def delete_friend(friend_id: int) -> dict:
         
     Note: This action cannot be undone - you'll need to add them as a friend again if needed.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.post(f"{base_url}/delete_friend/{friend_id}", headers=headers)
     return response.json()
 
 # Expense endpoints
 @mcp.tool
-def get_expense(expense_id: int) -> dict:
+def get_expense(browser_id: str, expense_id: int) -> dict:
     """Retrieve detailed information about a specific expense.
     
     This tool provides comprehensive details about an expense including:
@@ -491,6 +599,7 @@ def get_expense(expense_id: int) -> dict:
     - Creation and modification timestamps
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         expense_id (int): The unique identifier of the expense to retrieve
         
     Returns:
@@ -498,12 +607,16 @@ def get_expense(expense_id: int) -> dict:
         
     Note: You can only access expenses that involve you (you're a member of the group or friend).
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.get(f"{base_url}/get_expense/{expense_id}", headers=headers)
     return response.json()
 
 @mcp.tool
 def get_expenses(
+    browser_id: str,
     group_id: Optional[int] = None,
     friend_id: Optional[int] = None,
     dated_after: Optional[str] = None,
@@ -521,6 +634,7 @@ def get_expenses(
     - Pagination support for large expense lists
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         group_id (int, optional): Filter expenses to only those in this specific group
         friend_id (int, optional): Filter expenses to only those with this specific friend
         dated_after (str, optional): Filter expenses dated after this date (ISO format: "2024-01-01T00:00:00Z")
@@ -534,15 +648,18 @@ def get_expenses(
         dict: List of expenses matching the filter criteria
         
     Examples:
-        - Get all expenses: get_expenses()
-        - Get recent expenses: get_expenses(dated_after="2024-01-01T00:00:00Z")
-        - Get group expenses: get_expenses(group_id=123)
-        - Get friend expenses: get_expenses(friend_id=456)
-        - Paginated results: get_expenses(limit=10, offset=20)
+        - Get all expenses: get_expenses(123)
+        - Get recent expenses: get_expenses(123, dated_after="2024-01-01T00:00:00Z")
+        - Get group expenses: get_expenses(123, group_id=123)
+        - Get friend expenses: get_expenses(123, friend_id=456)
+        - Paginated results: get_expenses(123, limit=10, offset=20)
         
     Note: If both group_id and friend_id are provided, group_id takes precedence.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     params = {}
     
     if group_id is not None:
@@ -567,6 +684,7 @@ def get_expenses(
 
 @mcp.tool
 def create_expense_equal_split(
+    browser_id: str,
     description: str,
     cost: str,
     group_id: int,
@@ -583,6 +701,7 @@ def create_expense_equal_split(
     the person who paid for the expense.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         description (str): Short description of the expense (e.g., "Grocery shopping", "Dinner")
         cost (str): Total cost of the expense as a string (e.g., "25.50", "100.00")
         group_id (int): ID of the group to create the expense in
@@ -596,12 +715,15 @@ def create_expense_equal_split(
         dict: Created expense information with split details
         
     Examples:
-        - Simple expense: create_expense_equal_split("Pizza", "30.00", 123)
-        - Detailed expense: create_expense_equal_split("Rent", "1200.00", 123, "USD", "2024-01-01T00:00:00Z", "Monthly rent payment", 15, "monthly")
+        - Simple expense: create_expense_equal_split(123, "Pizza", "30.00", 123)
+        - Detailed expense: create_expense_equal_split(123, "Rent", "1200.00", 123, "USD", "2024-01-01T00:00:00Z", "Monthly rent payment", 15, "monthly")
         
     Note: The expense will be split equally among all group members, with you as the payer.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     data = {
         "description": description,
         "cost": cost,
@@ -623,6 +745,7 @@ def create_expense_equal_split(
 
 @mcp.tool
 def create_expense_by_shares(
+    browser_id: str,
     description: str,
     cost: str,
     group_id: int,
@@ -645,6 +768,7 @@ def create_expense_by_shares(
     - Their identification (user_id OR email + first_name + last_name)
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         description (str): Short description of the expense (e.g., "Concert tickets", "Hotel booking")
         cost (str): Total cost of the expense as a string (e.g., "150.00", "75.50")
         group_id (int): ID of the group (use 0 for no group - individual expense)
@@ -662,12 +786,15 @@ def create_expense_by_shares(
         dict: Created expense information with custom split details
         
     Examples:
-        - Group expense with custom splits: users=[{"user_id": 123, "paid_share": "100.00", "owed_share": "50.00"}, {"user_id": 456, "paid_share": "0.00", "owed_share": "50.00"}]
-        - Individual expense: users=[{"email": "alice@example.com", "first_name": "Alice", "last_name": "Smith", "paid_share": "30.00", "owed_share": "15.00"}]
+        - Group expense with custom splits: create_expense_by_shares(123, "Concert", "150.00", 456, [{"user_id": 123, "paid_share": "100.00", "owed_share": "50.00"}, {"user_id": 456, "paid_share": "0.00", "owed_share": "50.00"}])
+        - Individual expense: create_expense_by_shares(123, "Dinner", "60.00", 0, [{"email": "alice@example.com", "first_name": "Alice", "last_name": "Smith", "paid_share": "30.00", "owed_share": "15.00"}])
         
     Note: The sum of paid_shares should equal the total cost, and the sum of owed_shares should equal the total cost.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     data = {
         "description": description,
         "cost": cost,
@@ -693,6 +820,7 @@ def create_expense_by_shares(
 
 @mcp.tool
 def update_expense(
+    browser_id: str,
     expense_id: int,
     description: Optional[str] = None,
     cost: Optional[str] = None,
@@ -712,6 +840,7 @@ def update_expense(
     If you provide new user shares, ALL existing shares will be replaced with the new ones.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         expense_id (int): The unique identifier of the expense to update
         description (str, optional): New description for the expense
         cost (str, optional): New total cost as a string (e.g., "25.50")
@@ -730,13 +859,16 @@ def update_expense(
         dict: Updated expense information
         
     Examples:
-        - Update description: update_expense(123, description="Updated description")
-        - Update cost: update_expense(123, cost="35.00")
-        - Update splits: update_expense(123, users=[{"user_id": 456, "paid_share": "20.00", "owed_share": "10.00"}])
+        - Update description: update_expense(123, 456, description="Updated description")
+        - Update cost: update_expense(123, 456, cost="35.00")
+        - Update splits: update_expense(123, 456, users=[{"user_id": 456, "paid_share": "20.00", "owed_share": "10.00"}])
         
     Note: Only provide the parameters you want to change. If you provide users, all existing shares will be replaced.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     data = {}
     
     if description is not None:
@@ -766,7 +898,7 @@ def update_expense(
     return response.json()
 
 @mcp.tool
-def delete_expense(expense_id: int) -> dict:
+def delete_expense(browser_id: str, expense_id: int) -> dict:
     """Delete an expense from your Splitwise account.
     
     This tool removes an expense and all its associated data including:
@@ -779,6 +911,7 @@ def delete_expense(expense_id: int) -> dict:
     using the undelete_expense tool.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         expense_id (int): The unique identifier of the expense to delete
         
     Returns:
@@ -786,18 +919,22 @@ def delete_expense(expense_id: int) -> dict:
         
     Note: This action can be undone using the undelete_expense tool.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.post(f"{base_url}/delete_expense/{expense_id}", headers=headers)
     return response.json()
 
 @mcp.tool
-def undelete_expense(expense_id: int) -> dict:
+def undelete_expense(browser_id: str, expense_id: int) -> dict:
     """Restore a previously deleted expense.
     
     This tool attempts to restore an expense that was previously deleted. The success
     depends on whether the expense can still be restored and your permissions.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         expense_id (int): The unique identifier of the deleted expense to restore
         
     Returns:
@@ -805,13 +942,16 @@ def undelete_expense(expense_id: int) -> dict:
         
     Note: Restoration may not always be possible depending on how long ago the expense was deleted.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.post(f"{base_url}/undelete_expense/{expense_id}", headers=headers)
     return response.json()
 
 # Comment endpoints
 @mcp.tool
-def get_comments(expense_id: int) -> dict:
+def get_comments(browser_id: str, expense_id: int) -> dict:
     """Retrieve all comments for a specific expense.
     
     This tool returns all comments associated with an expense, including:
@@ -822,6 +962,7 @@ def get_comments(expense_id: int) -> dict:
     Comments are useful for discussing expenses, asking questions, or providing context.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         expense_id (int): The unique identifier of the expense to get comments for
         
     Returns:
@@ -829,13 +970,16 @@ def get_comments(expense_id: int) -> dict:
         
     Note: You can only access comments for expenses that involve you.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     params = {'expense_id': expense_id}
     response = requests.get(f"{base_url}/get_comments", headers=headers, params=params)
     return response.json()
 
 @mcp.tool
-def create_comment(expense_id: int, content: str) -> dict:
+def create_comment(browser_id: str, expense_id: int, content: str) -> dict:
     """Add a comment to an expense for discussion or clarification.
     
     This tool allows you to add a comment to an expense to discuss details,
@@ -845,6 +989,7 @@ def create_comment(expense_id: int, content: str) -> dict:
     clarify splitting decisions or provide important context.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         expense_id (int): The unique identifier of the expense to comment on
         content (str): The comment text to add (e.g., "Does this include tip?", "Split the delivery fee too")
         
@@ -852,12 +997,15 @@ def create_comment(expense_id: int, content: str) -> dict:
         dict: Created comment information including user and timestamp details
         
     Examples:
-        - Simple comment: create_comment(123, "Does this include the delivery fee?")
-        - Clarification: create_comment(123, "I paid for the parking separately, so we can ignore that cost")
+        - Simple comment: create_comment(123, 456, "Does this include the delivery fee?")
+        - Clarification: create_comment(123, 456, "I paid for the parking separately, so we can ignore that cost")
         
     Note: Comments are visible to all users involved in the expense.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     data = {
         "expense_id": expense_id,
         "content": content
@@ -866,13 +1014,14 @@ def create_comment(expense_id: int, content: str) -> dict:
     return response.json()
 
 @mcp.tool
-def delete_comment(comment_id: int) -> dict:
+def delete_comment(browser_id: str, comment_id: int) -> dict:
     """Delete a comment from an expense.
     
     This tool removes a comment that you previously added to an expense.
     You can only delete comments that you created.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         comment_id (int): The unique identifier of the comment to delete
         
     Returns:
@@ -880,13 +1029,17 @@ def delete_comment(comment_id: int) -> dict:
         
     Note: You can only delete comments that you created. Comments by other users cannot be deleted.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.post(f"{base_url}/delete_comment/{comment_id}", headers=headers)
     return response.json()
 
 # Notification endpoints
 @mcp.tool
 def get_notifications(
+    browser_id: str,
     updated_after: Optional[str] = None,
     limit: Optional[int] = None
 ) -> dict:
@@ -914,6 +1067,7 @@ def get_notifications(
     - 15: Friend currency conversion
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         updated_after (str, optional): Filter notifications updated after this date (ISO format: "2024-01-01T00:00:00Z")
         limit (int, optional): Maximum number of notifications to return (0 for maximum)
         
@@ -921,13 +1075,16 @@ def get_notifications(
         dict: List of recent notifications with activity details and timestamps
         
     Examples:
-        - Get all notifications: get_notifications()
-        - Get recent notifications: get_notifications(updated_after="2024-01-01T00:00:00Z")
-        - Limit results: get_notifications(limit=10)
+        - Get all notifications: get_notifications(123)
+        - Get recent notifications: get_notifications(123, updated_after="2024-01-01T00:00:00Z")
+        - Limit results: get_notifications(123, limit=10)
         
     Note: The content field contains HTML-formatted text suitable for display.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     params = {}
     
     if updated_after is not None:
@@ -940,7 +1097,7 @@ def get_notifications(
 
 # Other endpoints
 @mcp.tool
-def get_currencies() -> dict:
+def get_currencies(browser_id: str) -> dict:
     """Retrieve all supported currencies for expenses.
     
     This tool returns a comprehensive list of all currencies supported by Splitwise,
@@ -950,17 +1107,23 @@ def get_currencies() -> dict:
     - Currency code (e.g., "USD", "EUR", "INR")
     - Currency symbol/unit (e.g., "$", "€", "₹")
     
+    Args:
+        browser_id (str): Your browser ID (required for all tool calls)
+    
     Returns:
         dict: List of all supported currencies with their codes and symbols
         
     Example: Returns currencies like USD ($), EUR (€), INR (₹), GBP (£), etc.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.get(f"{base_url}/get_currencies", headers=headers)
     return response.json()
 
 @mcp.tool
-def get_categories() -> dict:
+def get_categories(browser_id: str) -> dict:
     """Retrieve all supported expense categories for organizing expenses.
     
     This tool returns a hierarchical list of all expense categories supported by Splitwise.
@@ -975,35 +1138,96 @@ def get_categories() -> dict:
     - Category IDs for use in expense creation
     - Category icons and display names
     
+    Args:
+        browser_id (str): Your browser ID (required for all tool calls)
+    
     Returns:
         dict: Hierarchical list of all expense categories with parent and subcategory information
         
     Example: Returns categories like Food & Drink > Groceries, Transportation > Gas, etc.
     """
-    headers = get_headers()
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils
+    headers = get_headers(caller_deatils["access_token"])
     response = requests.get(f"{base_url}/get_categories", headers=headers)
     return response.json()
 
 # Legacy tool for backward compatibility
 @mcp.tool
-def greet(name: str) -> str:
+def greet(browser_id: str, name: str) -> str:
     """Simple greeting tool for testing the MCP server connection.
     
     This is a legacy tool maintained for backward compatibility and testing purposes.
     
     Args:
+        browser_id (str): Your browser ID (required for all tool calls)
         name (str): Name to greet
         
     Returns:
         str: Greeting message
     """
+    caller_deatils = validate_browser_id(browser_id)
+    if caller_deatils["status"] == "fail":
+        return caller_deatils["error"]
     return f"Hello, {name}!"
+
+@mcp.custom_route("/callback", methods=["GET"])
+async def callback(request: Request) -> Response:
+    logger.info("OAuth callback endpoint called")
+    code = request.query_params.get("code")
+    browser_id = request.query_params.get("state")
+    data = {
+        "grant_type": "authorization_code",
+        "client_id": os.getenv("SPLITWISE_CONSUMER_KEY"),
+        "client_secret": os.getenv("SPLITWISE_CONSUMER_SECRET"),
+        "redirect_uri": os.getenv("REDIRECT_URI"),
+        "code": code
+    }
+    try:
+        resp = requests.post("https://secure.splitwise.com/oauth/token", data=data)
+        tokens = resp.json()
+        logger.info(f"Token exchange response: {tokens}")
+        splitwise_user_id = None
+        if browser_id is not None and "access_token" in tokens:
+            headers = {
+                "Authorization": f"Bearer {tokens['access_token']}"
+            }
+            user_resp = requests.get("https://secure.splitwise.com/api/v3.0/get_current_user", headers=headers)
+            user_json = user_resp.json()
+            logger.info(f"Fetched user info: {user_json}")
+            splitwise_user_id = user_json["user"]["id"]
+        if "access_token" in tokens and browser_id is not None and splitwise_user_id is not None:
+            try:
+                db.save_user_token(browser_id, splitwise_user_id, tokens["access_token"])
+                logger.info(f"Token saved for browser_id={browser_id}, splitwise_user_id={splitwise_user_id}")
+                from fastapi.responses import HTMLResponse
+                html_content = """
+                <html>
+                <body>
+                    <script>
+                        window.close();
+                    </script>
+                    <p>Authentication successful! You can close this window.</p>
+                </body>
+                </html>
+                """
+                return HTMLResponse(content=html_content)
+            except Exception as e:
+                logger.error(f"Failed to save token: {e}")
+                return JSONResponse({"status": "fail", "error": f"Failed to save token: {e}"})
+        else:
+            logger.error("Failed to get access token or missing user ID")
+            return JSONResponse({"status": "fail", "error": "Failed to get access token or missing user ID"})
+    except Exception as e:
+        logger.exception("Exception during OAuth callback handling")
+        return JSONResponse({"status": "fail", "error": f"Exception during callback: {e}"})
 
 if __name__ == "__main__":
     mcp.run(
         transport="http",
-        host="127.0.0.1",
-        port=4200,
+        host="0.0.0.0",
+        port=int(os.getenv("PORT", "80")),
         path="/mcp",
         log_level="debug",
     )

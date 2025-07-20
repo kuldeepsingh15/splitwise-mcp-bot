@@ -1002,7 +1002,7 @@ def greet(name: str) -> str:
 if __name__ == "__main__":
     mcp.run(
         transport="http",
-        host="127.0.0.1",
+        host="0.0.0.0",
         port=4200,
         path="/mcp",
         log_level="debug",

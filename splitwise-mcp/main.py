@@ -1222,7 +1222,10 @@ async def callback(request: Request) -> Response:
     except Exception as e:
         logger.exception("Exception during OAuth callback handling")
         return JSONResponse({"status": "fail", "error": f"Exception during callback: {e}"})
-
+@mcp.custom_route("/health", methods=["GET"])
+async def health(request: Request) -> Response:
+    return JSONResponse({"status": "ok", "message": "Splitwise MCP server is healthy."})
+    
 if __name__ == "__main__":
     mcp.run(
         transport="http",

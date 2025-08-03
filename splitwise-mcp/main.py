@@ -50,8 +50,7 @@ def validate_browser_id(browser_id: str) -> dict:
     user_data = db.get_user_token_and_splitwise_id(browser_id)
     if user_data is None:
         auth_url = (
-            f"https://secure.splitwise.com/oauth/authorize?"
-            f"client_id={os.getenv('SPLITWISE_CONSUMER_KEY')}&response_type=code&redirect_uri={os.getenv('REDIRECT_URI')}&state={browser_id}"
+            f"https://secure.splitwise.com/oauth/authorize?client_id={os.getenv('SPLITWISE_CONSUMER_KEY')}&response_type=code&redirect_uri={os.getenv('REDIRECT_URI')}&state={browser_id}"
         )
         return {
             "status": "fail",

@@ -58,11 +58,7 @@ async def initialize_mcp():
     config = {
         "mcpServers": {
             "splitwise": {
-                "command": "npx",
-                "args": [
-                    "mcp-remote",
-                    mcp_server_url
-                ]
+                "url": mcp_server_url
             }
         }
     }
